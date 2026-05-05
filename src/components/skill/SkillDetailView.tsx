@@ -547,6 +547,28 @@ export function SkillDetailView({
     }
   }, [isFileMode, fetchFileContent]);
 
+  // ── File mode: load cached explanation on mount ─────────────────────
+  const filePathForCache = useMemo(() => {
+    if (!isFileMode) return null;
+    return filePath ?? discoverMetadata?.filePath ?? null;
+  }, [isFileMode, filePath, discoverMetadata?.filePath]);
+
+  useEffect(() => {
+    if (!isFileMode || !filePathForCache || !isTauriRuntime()) return;
+    let cancelled = false;
+    invoke<string | null>("get_skill_explanation", {
+      skillId: filePathForCache,
+      lang: i18n.language,
+    })
+      .then((cached) => {
+        if (!cancelled && cached) {
+          setFileExplanation(cached);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isFileMode, filePathForCache, i18n.language]);
+
   // ── Store mode: load detail by skillId ────────────────────────────────
   useEffect(() => {
     if (detailRequest) {
@@ -685,7 +707,11 @@ export function SkillDetailView({
     if (isFileMode && skillContent) {
       setFileIsExplaining(true);
       setFileExplanation(null);
-      invoke<string>("explain_skill", { content: skillContent })
+      invoke<string>("explain_skill", {
+        content: skillContent,
+        skillId: filePathForCache,
+        lang: i18n.language,
+      })
         .then(setFileExplanation)
         .catch((err) => setFileExplanation(`Error: ${String(err)}`))
         .finally(() => setFileIsExplaining(false));
@@ -698,6 +724,7 @@ export function SkillDetailView({
 
   function handleRefreshExplanation() {
     if (isFileMode && skillContent) {
+      // Re-generate (explain_skill will overwrite the cached result)
       handleGenerateExplanation();
       return;
     }

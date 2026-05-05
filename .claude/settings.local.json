@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --version)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(rtk ls *)",
+      "Bash(rtk git *)",
+      "Bash(rtk pnpm *)",
+      "Bash(rtk npx *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm tauri *)",
+      "Bash(pnpm test *)",
+      "Bash(rtk read *)",
+      "Bash(rtk vitest *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(rtk find *)",
+      "Bash(powershell -Command \"Get-ItemPropertyValue 'HKLM:\\\\SOFTWARE\\\\Microsoft\\\\VisualStudio\\\\Setup\\\\VS' 'Setup' -ErrorAction SilentlyContinue\")",
+      "Bash(winget --version)",
+      "Bash(rtk curl *)",
+      "Bash(/tmp/rustup-init.exe *)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(powershell -Command \"[Environment]::GetEnvironmentVariable\\('Path', 'User'\\)\")",
+      "Bash(/c/Users/enen/.cargo/bin/rustc --version)",
+      "Bash(/c/Users/enen/.cargo/bin/cargo build *)",
+      "Bash(winget install *)",
+      "Bash(/c/Users/enen/.cargo/bin/rustup target *)",
+      "Bash(/c/Users/enen/.cargo/bin/rustup default *)",
+      "Bash(cmd.exe /c \"call \\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\\\\\" && set\")",
+      "Bash(powershell -Command \"& { cmd.exe /c 'call \\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\\\\\" && set' }\")",
+      "Bash(rtk cargo *)",
+      "Bash(rtk du *)",
+      "Bash(rtk wc *)",
+      "Bash(where cargo *)",
+      "Bash(rtk tsc *)"
+    ]
+  }
+}

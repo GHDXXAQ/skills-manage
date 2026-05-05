@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   FileInput,
@@ -23,6 +23,7 @@ import { SkillPickerDialog } from "@/components/collection/SkillPickerDialog";
 import { CollectionInstallDialog } from "@/components/collection/CollectionInstallDialog";
 import { InstallDialog } from "@/components/central/InstallDialog";
 import { UnifiedSkillCard } from "@/components/skill/UnifiedSkillCard";
+import { useSkillExplanations } from "@/hooks/useSkillExplanations";
 import { SkillDetailDrawer } from "@/components/skill/SkillDetailDrawer";
 import { Collection, SkillWithLinks } from "@/types";
 import { cn } from "@/lib/utils";
@@ -47,7 +48,7 @@ const COLLECTIONS_RETURN_SCOPE = "collections";
 // ─── CollectionsListView ─────────────────────────────────────────────────────
 
 export function CollectionsListView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -73,6 +74,13 @@ export function CollectionsListView() {
   const centralAgents = useCentralSkillsStore((s) => s.agents);
   const loadCentralSkills = useCentralSkillsStore((s) => s.loadCentralSkills);
   const installCentralSkill = useCentralSkillsStore((s) => s.installSkill);
+
+  // Fetch AI explanations for collection skills
+  const skillIds = useMemo(
+    () => currentDetail?.skills.map((s) => s.id) ?? [],
+    [currentDetail?.skills]
+  );
+  const explanations = useSkillExplanations(skillIds, i18n.language);
 
   // Restoration context supplied via navigation state when returning from a
   // skill detail. `collectionContext` identifies the collection we should
@@ -458,6 +466,7 @@ export function CollectionsListView() {
                           key={skill.id}
                           name={skill.name}
                           description={skill.description}
+                          explanation={explanations.get(skill.id)}
                           onDetail={() => handleOpenDrawer(skill.id)}
                           detailButtonRef={(node) => setDetailButtonRef(skill.id, node)}
                           onInstallTo={() => handleInstallSingleSkillClick(skill.id)}

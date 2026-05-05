@@ -12,8 +12,10 @@ import {
   Loader2,
   Lock,
   Trash2,
+  Bot,
 } from "lucide-react";
 import type { MouseEventHandler, Ref } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineConfirmAction } from "@/components/ui/inline-confirm-action";
@@ -84,6 +86,8 @@ export interface UnifiedSkillCardProps {
   /** Core data — always required. */
   name: string;
   description?: string;
+  /** AI-generated explanation — shown instead of description when available. */
+  explanation?: string | null;
   className?: string;
 
   /** Click the card itself (platform variant navigates to detail). */
@@ -132,13 +136,59 @@ export interface UnifiedSkillCardProps {
   detailButtonRef?: Ref<HTMLButtonElement>;
 }
 
+// ─── ExplanationPreview ──────────────────────────────────────────────────────
+
+const EXPLANATION_PREVIEW_LIMIT = 120;
+
+function ExplanationPreview({
+  text,
+  expanded,
+  onToggle,
+}: {
+  text: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { i18n } = useTranslation();
+  const needsTruncation = text.length > EXPLANATION_PREVIEW_LIMIT;
+  const displayText = expanded || !needsTruncation
+    ? text
+    : `${text.slice(0, EXPLANATION_PREVIEW_LIMIT)}...`;
+
+  const showMoreLabel = i18n.language.startsWith("zh") ? "展开全文" : "Show more";
+  const showLessLabel = i18n.language.startsWith("zh") ? "收起" : "Show less";
+
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        <Bot className="size-3 inline-block align-text-top mr-1 text-primary/60" />
+        {displayText}
+      </p>
+      {needsTruncation && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          className="text-xs text-primary/70 hover:text-primary hover:underline mt-0.5 cursor-pointer"
+        >
+          {expanded ? showLessLabel : showMoreLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── UnifiedSkillCard ─────────────────────────────────────────────────────────
 
 export function UnifiedSkillCard(props: UnifiedSkillCardProps) {
   const { t } = useTranslation();
+  const [explanationExpanded, setExplanationExpanded] = useState(false);
   const {
     name,
     description,
+    explanation,
     className,
     onClick,
     checkbox,
@@ -209,9 +259,15 @@ export function UnifiedSkillCard(props: UnifiedSkillCardProps) {
           <div className="flex flex-1 items-start justify-between gap-3">
             <div className="min-w-0 flex-1 space-y-1">
               <div className="font-medium text-sm text-foreground truncate">{name}</div>
-              {description && (
+              {explanation ? (
+                <ExplanationPreview
+                  text={explanation}
+                  expanded={explanationExpanded}
+                  onToggle={() => setExplanationExpanded((v) => !v)}
+                />
+              ) : description ? (
                 <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{description}</p>
-              )}
+              ) : null}
               {sourceType && <SourceIndicator sourceType={sourceType} />}
             </div>
             <ChevronRight className="size-4 text-muted-foreground shrink-0 mt-0.5" />
@@ -363,10 +419,16 @@ export function UnifiedSkillCard(props: UnifiedSkillCardProps) {
             )}
           </div>
 
-          {/* Row 2: Description — full width, not compressed by actions */}
-          {description && (
+          {/* Row 2: Description / AI explanation — full width, not compressed by actions */}
+          {explanation ? (
+            <ExplanationPreview
+              text={explanation}
+              expanded={explanationExpanded}
+              onToggle={() => setExplanationExpanded((v) => !v)}
+            />
+          ) : description ? (
             <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{description}</p>
-          )}
+          ) : null}
 
           {/* Row 3: Info badges */}
           <div className="flex flex-wrap items-center gap-1.5 empty:hidden">

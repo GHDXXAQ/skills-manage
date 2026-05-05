@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -15,6 +15,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { UnifiedSkillCard } from "@/components/skill/UnifiedSkillCard";
+import { useSkillExplanations } from "@/hooks/useSkillExplanations";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { usePlatformStore } from "@/stores/platformStore";
 import { useCentralSkillsStore } from "@/stores/centralSkillsStore";
@@ -40,7 +41,7 @@ export function CollectionView() {
   const { collectionId } = useParams<{ collectionId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const currentDetail = useCollectionStore((s) => s.currentDetail);
   const isLoadingDetail = useCollectionStore((s) => s.isLoadingDetail);
@@ -61,6 +62,13 @@ export function CollectionView() {
   const installCentralSkill = useCentralSkillsStore((s) => s.installSkill);
 
   const importCollection = useCollectionStore((s) => s.importCollection);
+
+  // Fetch AI explanations for collection skills
+  const skillIds = useMemo(
+    () => currentDetail?.skills.map((s) => s.id) ?? [],
+    [currentDetail?.skills]
+  );
+  const explanations = useSkillExplanations(skillIds, i18n.language);
 
   // Dialog open states.
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -392,6 +400,7 @@ export function CollectionView() {
                 key={skill.id}
                 name={skill.name}
                 description={skill.description}
+                explanation={explanations.get(skill.id)}
                 onDetail={() =>
                   navigate(`/skill/${skill.id}`, {
                     state: {

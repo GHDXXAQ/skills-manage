@@ -694,68 +694,68 @@ fn format_reqwest_error(e: &reqwest::Error) -> String {
     }
 }
 
-#[tauri::command]
-pub async fn explain_skill(state: State<'_, AppState>, content: String) -> Result<String, String> {
-    // Read dynamic provider settings
-    async fn get_setting(pool: &crate::db::DbPool, key: &str) -> Option<String> {
-        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
-            .bind(key)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten()
-            .filter(|v| !v.trim().is_empty())
-    }
+// ─── Batch AI Explanation types ───────────────────────────────────────────────
 
-    let api_key = get_setting(&state.db, "ai_api_key")
-        .await
-        .ok_or_else(|| "请先在设置中配置 AI API Key".to_string())?;
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchExplainSkillEntry {
+    pub id: String,
+    pub file_path: String,
+}
 
-    let api_url = get_setting(&state.db, "ai_api_url")
-        .await
-        .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchExplainProgressPayload {
+    pub skill_id: String,
+    pub current: usize,
+    pub total: usize,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
-    let model = get_setting(&state.db, "ai_model")
-        .await
-        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchExplainStartPayload {
+    pub total: usize,
+}
 
-    let client = reqwest::Client::builder()
-        .user_agent("skills-manage/0.9.1")
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchExplainCompletePayload {
+    pub total: usize,
+}
 
-    // Truncate content if too long
-    let truncated = if content.len() > 8000 {
-        format!("{}...\n\n(内容已截断)", &content[..8000])
-    } else {
-        content
-    };
+/// Core non-streaming explanation logic — no settings/HTTP-client setup.
+/// Caller provides all parameters so the function can be reused by both the
+/// single-skill and batch commands without repeating the setup for each skill.
+async fn explain_skill_non_streaming(
+    pool: &crate::db::DbPool,
+    client: &reqwest::Client,
+    skill_id: &str,
+    content: &str,
+    lang: &str,
+    api_key: &str,
+    api_url: &str,
+    model: &str,
+) -> Result<String, String> {
+    let truncated = truncate_content(content);
+    let prompt = build_explanation_prompt(&truncated, lang);
 
     let request = ClaudeRequest {
-        model,
+        model: model.to_string(),
         max_tokens: 1024,
         messages: vec![ClaudeMessage {
             role: "user".to_string(),
-            content: format!(
-                "请用中文简洁地解释以下 AI Agent Skill（SKILL.md）的用途、使用场景和关键功能。\
-                分为三部分：1) 一句话总结 2) 适用场景 3) 关键功能点。\
-                控制在 200 字以内。\n\n---\n\n{}",
-                truncated
-            ),
+            content: prompt,
         }],
     };
 
-    let protocol = detect_explanation_api_protocol(&api_url);
+    let protocol = detect_explanation_api_protocol(api_url);
     let mut req_builder = client
-        .post(&api_url)
+        .post(api_url)
         .header("content-type", "application/json");
 
     match protocol {
         ExplanationApiProtocol::AnthropicCompatible | ExplanationApiProtocol::Unknown => {
             req_builder = req_builder
-                .header("x-api-key", &api_key)
+                .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01");
         }
         ExplanationApiProtocol::OpenAiCompatible => {
@@ -780,23 +780,25 @@ pub async fn explain_skill(state: State<'_, AppState>, content: String) -> Resul
         .await
         .map_err(|e| format!("读取响应失败: {}", e))?;
 
-    // Try parsing as Anthropic format: { "content": [{ "type": "text", "text": "..." }] }
+    // Anthropic format: { "content": [{ "type": "text", "text": "..." }] }
     if let Ok(claude_resp) = serde_json::from_str::<ClaudeResponse>(&body) {
-        // Filter for "text" type blocks, skip "thinking" blocks
         if let Some(block) = claude_resp
             .content
             .iter()
             .find(|b| b.block_type.is_empty() || b.block_type == "text")
         {
             if !block.text.is_empty() {
-                return Ok(block.text.clone());
+                let text = block.text.clone();
+                if !skill_id.is_empty() {
+                    let _ = cache_skill_explanation(pool, skill_id, lang, model, &text).await;
+                }
+                return Ok(text);
             }
         }
     }
 
-    // Fallback: try extracting text from any JSON with a "text" or "content" field
+    // OpenAI fallback: { "choices": [{ "message": { "content": "..." } }] }
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
-        // Some providers return { "choices": [{ "message": { "content": "..." } }] }
         if let Some(text) = val
             .get("choices")
             .and_then(|c| c.get(0))
@@ -804,11 +806,150 @@ pub async fn explain_skill(state: State<'_, AppState>, content: String) -> Resul
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
         {
-            return Ok(text.to_string());
+            let text = text.to_string();
+            if !skill_id.is_empty() {
+                let _ = cache_skill_explanation(pool, skill_id, lang, model, &text).await;
+            }
+            return Ok(text);
         }
     }
 
     Err(format!("无法解析响应: {}", &body[..body.len().min(500)]))
+}
+
+#[tauri::command]
+pub async fn explain_skill(
+    state: State<'_, AppState>,
+    content: String,
+    skill_id: Option<String>,
+    lang: Option<String>,
+) -> Result<String, String> {
+    let api_key = get_ai_setting(&state.db, "ai_api_key")
+        .await
+        .ok_or_else(|| "请先在设置中配置 AI API Key".to_string())?;
+
+    let api_url = get_ai_setting(&state.db, "ai_api_url")
+        .await
+        .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
+
+    let model = get_ai_setting(&state.db, "ai_model")
+        .await
+        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+
+    let client = reqwest::Client::builder()
+        .user_agent("skills-manage/0.9.1")
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let effective_lang = lang.as_deref().unwrap_or("zh");
+    let effective_skill_id = skill_id.as_deref().unwrap_or("");
+
+    explain_skill_non_streaming(
+        &state.db, &client, effective_skill_id, &content, effective_lang,
+        &api_key, &api_url, &model,
+    ).await
+}
+
+/// Batch-generate AI explanations for multiple skills.
+/// Emits `skill:explanation:batch-start`, `skill:explanation:batch-progress`, and
+/// `skill:explanation:batch-complete` events for progress tracking.
+#[tauri::command]
+pub async fn batch_explain_skills(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    skills: Vec<BatchExplainSkillEntry>,
+    lang: String,
+) -> Result<(), String> {
+    let api_key = get_ai_setting(&state.db, "ai_api_key")
+        .await
+        .ok_or_else(|| "请先在设置中配置 AI API Key".to_string())?;
+
+    let api_url = get_ai_setting(&state.db, "ai_api_url")
+        .await
+        .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
+
+    let model = get_ai_setting(&state.db, "ai_model")
+        .await
+        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+
+    let client = reqwest::Client::builder()
+        .user_agent("skills-manage/0.9.1")
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let total = skills.len();
+
+    let _ = app.emit("skill:explanation:batch-start", BatchExplainStartPayload { total });
+
+    for (i, entry) in skills.iter().enumerate() {
+        let _ = app.emit(
+            "skill:explanation:batch-progress",
+            BatchExplainProgressPayload {
+                skill_id: entry.id.clone(),
+                current: i + 1,
+                total,
+                status: "processing".to_string(),
+                error: None,
+            },
+        );
+
+        let content = match std::fs::read_to_string(&entry.file_path) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = app.emit(
+                    "skill:explanation:batch-progress",
+                    BatchExplainProgressPayload {
+                        skill_id: entry.id.clone(),
+                        current: i + 1,
+                        total,
+                        status: "error".to_string(),
+                        error: Some(format!("读取文件失败: {}", e)),
+                    },
+                );
+                continue;
+            }
+        };
+
+        match explain_skill_non_streaming(
+            &state.db, &client, &entry.id, &content, &lang,
+            &api_key, &api_url, &model,
+        )
+        .await
+        {
+            Ok(_) => {
+                let _ = app.emit(
+                    "skill:explanation:batch-progress",
+                    BatchExplainProgressPayload {
+                        skill_id: entry.id.clone(),
+                        current: i + 1,
+                        total,
+                        status: "completed".to_string(),
+                        error: None,
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = app.emit(
+                    "skill:explanation:batch-progress",
+                    BatchExplainProgressPayload {
+                        skill_id: entry.id.clone(),
+                        current: i + 1,
+                        total,
+                        status: "error".to_string(),
+                        error: Some(e),
+                    },
+                );
+            }
+        }
+    }
+
+    let _ = app.emit("skill:explanation:batch-complete", BatchExplainCompletePayload { total });
+
+    Ok(())
 }
 
 // ─── Streaming AI Explanation ────────────────────────────────────────────────
@@ -1297,6 +1438,45 @@ pub async fn get_skill_explanation(
     lang: String,
 ) -> Result<Option<String>, String> {
     load_cached_skill_explanation(&state.db, &skill_id, &lang).await
+}
+
+/// Batch retrieve cached skill explanations for multiple skills.
+/// Returns a map of skill_id -> explanation for skills that have a cached explanation.
+#[tauri::command]
+pub async fn batch_get_skill_explanations(
+    state: State<'_, AppState>,
+    skill_ids: Vec<String>,
+    lang: String,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    use sqlx::Row;
+
+    if skill_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let placeholders: Vec<String> = skill_ids.iter().map(|_| "?".to_string()).collect();
+    let sql = format!(
+        "SELECT skill_id, explanation FROM skill_explanations WHERE skill_id IN ({}) AND lang = ?",
+        placeholders.join(", ")
+    );
+
+    let mut query = sqlx::query(&sql);
+    for id in &skill_ids {
+        query = query.bind(id);
+    }
+    query = query.bind(&lang);
+
+    let rows = query.fetch_all(&state.db).await.map_err(|e| e.to_string())?;
+
+    let mut result = std::collections::HashMap::new();
+    for row in rows {
+        let skill_id: String = row.get("skill_id");
+        let explanation: String = row.get("explanation");
+        if explanation_has_content(&explanation) {
+            result.insert(skill_id, explanation);
+        }
+    }
+    Ok(result)
 }
 
 /// Stream an AI-generated explanation for a skill, with DB caching.

@@ -36,6 +36,7 @@ import { AgentWithStatus, CentralSkillBundle, ScannedSkill, SkillWithLinks } fro
 import { GitHubRepoImportWizard } from "@/components/marketplace/GitHubRepoImportWizard";
 import { useMarketplaceStore } from "@/stores/marketplaceStore";
 import { useSkillListViewMode } from "@/hooks/useSkillListViewMode";
+import { useSkillExplanations } from "@/hooks/useSkillExplanations";
 import { formatPathForDisplay } from "@/lib/path";
 import { buildSearchText, normalizeSearchQuery } from "@/lib/search";
 import { dirnameFromSkillFile, splitSkillsByTopLevel } from "@/lib/skillFolders";
@@ -231,7 +232,7 @@ function getSkillSortTimestamp(
 // ─── CentralSkillsView ────────────────────────────────────────────────────────
 
 export function CentralSkillsView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const rawSkills = useCentralSkillsStore((state) => state.skills);
   const rawBundles = useCentralSkillsStore((state) => state.bundles);
   const rawAgents = useCentralSkillsStore((state) => state.agents);
@@ -255,6 +256,11 @@ export function CentralSkillsView() {
     agents.find((agent) => agent.id === "central")?.global_skills_dir ?? t("central.path");
   const centralSkillsDir = formatPathForDisplay(centralSkillsRoot);
   const isLoading = shouldUseBrowserFixtures ? false : rawIsLoading ?? false;
+
+  // Fetch AI explanations for visible skills
+  const skillIds = useMemo(() => skills.map((s) => s.id), [skills]);
+  const explanations = useSkillExplanations(skillIds, i18n.language);
+
   const loadCentralSkills = rawLoadCentralSkills ?? noopLoadCentralSkills;
   const loadCentralBundles =
     useCentralSkillsStore((state) => state.loadCentralBundles) ??
@@ -765,6 +771,7 @@ export function CentralSkillsView() {
                       key={skill.id}
                       name={skill.name}
                       description={skill.description}
+                      explanation={explanations.get(skill.id)}
                       onDetail={() => handleOpenDrawer(skill.id)}
                       onInstallTo={() => handleInstallClick(skill)}
                       onDeleteFromCentral={() => handleDeleteClick(skill)}

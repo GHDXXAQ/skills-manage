@@ -7,6 +7,7 @@ import {
   Folder,
   ArrowUpRight,
   StopCircle,
+  Bot,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -19,10 +20,12 @@ import { DiscoverConfigDialog } from "@/components/discover/DiscoverConfigDialog
 import { UnifiedSkillCard } from "@/components/skill/UnifiedSkillCard";
 import { SkillDetailDrawer } from "@/components/skill/SkillDetailDrawer";
 import { InstallDialog } from "@/components/central/InstallDialog";
+import { useSkillExplanations } from "@/hooks/useSkillExplanations";
 import { useDiscoverStore } from "@/stores/discoverStore";
 import { usePlatformStore } from "@/stores/platformStore";
 import { DiscoveredSkill, SkillWithLinks } from "@/types";
-import { invoke } from "@/lib/tauri";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { invoke, isTauriRuntime, listen } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { consumeScrollPosition } from "@/lib/scrollRestoration";
 import { VirtualizedList } from "@/components/ui/virtualized-list";
@@ -97,7 +100,7 @@ function ProgressView() {
 // ─── DiscoverView ─────────────────────────────────────────────────────────────
 
 export function DiscoverView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const { projectPath } = useParams<{ projectPath: string }>();
@@ -147,6 +150,11 @@ export function DiscoverView() {
   const discoverContext = location.state?.discoverContext as
     | { projectPath?: string; skillSearch?: string }
     | undefined;
+
+  // Batch AI explanation state
+  const [isBatchExplaining, setIsBatchExplaining] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
+  const [explainRefreshKey, setExplainRefreshKey] = useState(0);
 
   // Load persisted results on mount.
   useEffect(() => {
@@ -247,6 +255,36 @@ export function DiscoverView() {
       .filter(({ searchText }) => searchText.includes(normalizedSkillQuery))
       .map(({ skill }) => skill);
   }, [normalizedSkillQuery, selectedProject, selectedProjectSkillEntries]);
+
+  // Build explanation lookup keys: use file_path (for file-mode caches) and,
+  // for already-central skills, the dir_path basename (for centrally cached
+  // explanations generated through the central/skill-detail views).
+  const explanationKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const skill of displayedSkills) {
+      keys.add(skill.file_path);
+      if (skill.is_already_central) {
+        const baseName = getPathBasename(skill.dir_path);
+        if (baseName) keys.add(baseName);
+      }
+    }
+    return Array.from(keys);
+  }, [displayedSkills]);
+
+  const rawExplanations = useSkillExplanations(explanationKeys, i18n.language, explainRefreshKey);
+
+  const explanations = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const skill of displayedSkills) {
+      const exp =
+        rawExplanations.get(skill.file_path) ??
+        (skill.is_already_central
+          ? rawExplanations.get(getPathBasename(skill.dir_path) ?? "")
+          : undefined);
+      if (exp) map.set(skill.id, exp);
+    }
+    return map;
+  }, [displayedSkills, rawExplanations]);
 
   useEffect(() => {
     if (!contentRef.current) return;
@@ -405,6 +443,64 @@ export function DiscoverView() {
     [t]
   );
 
+  async function handleBatchExplain() {
+    if (!isTauriRuntime() || !selectedProject || selectedProject.skills.length === 0) return;
+
+    const skills = selectedProject.skills;
+    setIsBatchExplaining(true);
+    setBatchProgress({ current: 0, total: skills.length });
+
+    const unlistenFns: UnlistenFn[] = [];
+
+    try {
+      const unlistenProgress = await listen<{
+        skill_id: string;
+        current: number;
+        total: number;
+        status: string;
+        error?: string;
+      }>("skill:explanation:batch-progress", (event) => {
+        setBatchProgress({ current: event.payload.current, total: event.payload.total });
+        if (event.payload.status === "error") {
+          toast.error(
+            t("platform.batchExplainError", {
+              skill: event.payload.skill_id,
+              error: event.payload.error ?? "",
+              defaultValue: `[${event.payload.skill_id}] ${event.payload.error ?? "生成失败"}`,
+            })
+          );
+        }
+      });
+      unlistenFns.push(unlistenProgress);
+
+      const unlistenComplete = await listen("skill:explanation:batch-complete", () => {
+        setIsBatchExplaining(false);
+        setBatchProgress(null);
+        setExplainRefreshKey((k) => k + 1);
+        toast.success(t("platform.batchExplainComplete", { defaultValue: "AI 解释生成完成" }));
+      });
+      unlistenFns.push(unlistenComplete);
+
+      // Non-central skills use file_path as cache key (matches SkillDetailView
+      // file-mode caching); central skills use dir_path basename (matches store
+      // mode lookup via explanationRequestKey = detail?.row_id ?? skillId).
+      const entries = skills.map((s) => ({
+        id: s.is_already_central
+          ? (getPathBasename(s.dir_path) ?? s.file_path)
+          : s.file_path,
+        file_path: s.file_path,
+      }));
+
+      await invoke("batch_explain_skills", { skills: entries, lang: "zh" });
+    } catch (err) {
+      setIsBatchExplaining(false);
+      setBatchProgress(null);
+      toast.error(String(err));
+    } finally {
+      unlistenFns.forEach((fn) => fn());
+    }
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   // Scanning or empty — full-width content
@@ -453,12 +549,37 @@ export function DiscoverView() {
               skills: totalSkillsFound,
               projects: discoveredProjects.length,
             })}
+            {isBatchExplaining && batchProgress && (
+              <span className="ml-2 text-primary">
+                {t("platform.batchExplainProgress", {
+                  current: batchProgress.current,
+                  total: batchProgress.total,
+                  defaultValue: `AI解释中 (${batchProgress.current}/${batchProgress.total})`,
+                })}
+              </span>
+            )}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={handleRescan}>
-          <RefreshCw className="size-3.5 mr-1" />
-          {t("discover.reScan")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleBatchExplain}
+            disabled={isBatchExplaining || !selectedProject || selectedProject.skills.length === 0}
+            aria-label={t("platform.batchExplainLabel", { defaultValue: "一键AI中文解释" })}
+          >
+            {isBatchExplaining ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Bot className="size-3.5" />
+            )}
+            <span>{t("platform.batchExplainLabel", { defaultValue: "一键AI中文解释" })}</span>
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleRescan}>
+            <RefreshCw className="size-3.5 mr-1" />
+            {t("discover.reScan")}
+          </Button>
+        </div>
       </div>
 
       {/* Master-Detail body */}
@@ -632,6 +753,7 @@ export function DiscoverView() {
                         key={skill.id}
                         name={skill.name}
                         description={skill.description}
+                        explanation={explanations.get(skill.id)}
                         checkbox={{
                           checked: selectedSkillIds.has(skill.id),
                           onChange: () => toggleSkillSelection(skill.id),
@@ -664,6 +786,7 @@ export function DiscoverView() {
                         key={skill.id}
                         name={skill.name}
                         description={skill.description}
+                        explanation={explanations.get(skill.id)}
                         checkbox={{
                           checked: selectedSkillIds.has(skill.id),
                           onChange: () => toggleSkillSelection(skill.id),

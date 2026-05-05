@@ -738,6 +738,7 @@ pub async fn scan_all_skills(state: State<'_, AppState>) -> Result<ScanResult, S
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
@@ -915,6 +916,7 @@ mod tests {
         assert!(target.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_detect_link_type_symlink() {
         let tmp = TempDir::new().unwrap();
@@ -935,6 +937,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_detect_link_type_symlink_is_symlink_regardless_of_is_central() {
         let tmp = TempDir::new().unwrap();
@@ -1065,6 +1068,7 @@ mod tests {
         assert!(skills[0].is_central);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_scan_directory_detects_symlinked_skill() {
         let tmp = TempDir::new().unwrap();
@@ -1131,6 +1135,7 @@ mod tests {
             .contains("mlops/evaluation/weights-and-biases"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_scan_skill_root_follows_symlinked_bundle_without_looping() {
         let tmp = TempDir::new().unwrap();

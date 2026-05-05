@@ -105,8 +105,10 @@ pub fn run() {
             commands::marketplace::sync_registry_with_options,
             commands::marketplace::search_marketplace_skills,
             commands::marketplace::install_marketplace_skill,
+            commands::marketplace::batch_explain_skills,
             commands::marketplace::explain_skill,
             commands::marketplace::get_skill_explanation,
+            commands::marketplace::batch_get_skill_explanations,
             commands::marketplace::explain_skill_stream,
             commands::marketplace::refresh_skill_explanation,
         ])

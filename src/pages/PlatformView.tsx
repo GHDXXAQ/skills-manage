@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Search, Blocks, FolderOpen } from "lucide-react";
+import { Bot, Loader2, Search, Blocks, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { usePlatformStore } from "@/stores/platformStore";
 import { useSkillStore } from "@/stores/skillStore";
 import { useCentralSkillsStore } from "@/stores/centralSkillsStore";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { UnifiedSkillCard } from "@/components/skill/UnifiedSkillCard";
+import { useSkillExplanations } from "@/hooks/useSkillExplanations";
 import { SkillDetailDrawer } from "@/components/skill/SkillDetailDrawer";
 import {
   SkillFolderDrawer,
@@ -21,7 +23,9 @@ import { useSkillListViewMode } from "@/hooks/useSkillListViewMode";
 import { formatPathForDisplay } from "@/lib/path";
 import { splitSkillsByTopLevel } from "@/lib/skillFolders";
 import { cn } from "@/lib/utils";
+import { invoke, isTauriRuntime, listen } from "@/lib/tauri";
 import { ScannedSkill, SkillWithLinks } from "@/types";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
@@ -68,6 +72,11 @@ export function PlatformView() {
   const [folderDrawerGroupPath, setFolderDrawerGroupPath] = useState<string | null>(null);
   const [isFolderDrawerOpen, setIsFolderDrawerOpen] = useState(false);
   const [returnFocusRowKey, setReturnFocusRowKey] = useState<string | null>(null);
+
+  // Batch AI explanation state
+  const [isBatchExplaining, setIsBatchExplaining] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
+  const [explainRefreshKey, setExplainRefreshKey] = useState(0);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const detailButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
@@ -137,6 +146,61 @@ export function PlatformView() {
     }
   }
 
+  async function handleBatchExplain() {
+    if (!isTauriRuntime() || skills.length === 0) return;
+
+    setIsBatchExplaining(true);
+    setBatchProgress({ current: 0, total: skills.length });
+
+    const unlistenFns: UnlistenFn[] = [];
+
+    try {
+      // Listen for batch progress events
+      const unlistenProgress = await listen<{
+        skill_id: string;
+        current: number;
+        total: number;
+        status: string;
+        error?: string;
+      }>("skill:explanation:batch-progress", (event) => {
+        setBatchProgress({ current: event.payload.current, total: event.payload.total });
+        if (event.payload.status === "error") {
+          toast.error(
+            t("platform.batchExplainError", {
+              skill: event.payload.skill_id,
+              error: event.payload.error ?? "",
+              defaultValue: `[${event.payload.skill_id}] ${event.payload.error ?? "生成失败"}`,
+            })
+          );
+        }
+      });
+      unlistenFns.push(unlistenProgress);
+
+      const unlistenComplete = await listen("skill:explanation:batch-complete", () => {
+        setIsBatchExplaining(false);
+        setBatchProgress(null);
+        setExplainRefreshKey((k) => k + 1);
+        toast.success(t("platform.batchExplainComplete", { defaultValue: "AI 解释生成完成" }));
+      });
+      unlistenFns.push(unlistenComplete);
+
+      // Build skill list using row_id as cache key (matches what the detail
+      // view's store mode uses for explanation lookup).
+      const entries = skills.map((s) => ({
+        id: s.row_id ?? s.id,
+        file_path: s.file_path,
+      }));
+
+      await invoke("batch_explain_skills", { skills: entries, lang: "zh" });
+    } catch (err) {
+      setIsBatchExplaining(false);
+      setBatchProgress(null);
+      toast.error(String(err));
+    } finally {
+      unlistenFns.forEach((fn) => fn());
+    }
+  }
+
   const isLoading = agentId ? (loadingByAgent[agentId] ?? false) : false;
 
   // Memoize skills to avoid changing dependency reference on every render
@@ -144,6 +208,11 @@ export function PlatformView() {
     () => (agentId ? (skillsByAgent[agentId] ?? []) : []),
     [agentId, skillsByAgent]
   );
+
+  // Fetch AI explanations for skills (use row_id as cache key to match
+  // the store-mode explanation key = detail?.row_id ?? rowId ?? skillId).
+  const skillIds = useMemo(() => skills.map((s) => s.row_id ?? s.id), [skills]);
+  const explanations = useSkillExplanations(skillIds, i18n.language, explainRefreshKey);
 
   const sourceFilteredSkills = useMemo(() => {
     if (!isClaudePage || sourceFilter === "all") {
@@ -319,13 +388,40 @@ export function PlatformView() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-border px-6 py-4">
-        <div className="flex items-center gap-2.5">
-          <PlatformIcon agentId={agent.id} className="size-6 text-primary/70" size={24} />
-          <h1 className="text-xl font-semibold">{agent.display_name}</h1>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2.5">
+              <PlatformIcon agentId={agent.id} className="size-6 text-primary/70" size={24} />
+              <h1 className="text-xl font-semibold">{agent.display_name}</h1>
+              {isBatchExplaining && batchProgress && (
+                <span className="text-xs text-muted-foreground ml-2">
+                  {t("platform.batchExplainProgress", {
+                    current: batchProgress.current,
+                    total: batchProgress.total,
+                    defaultValue: `AI解释中 (${batchProgress.current}/${batchProgress.total})`,
+                  })}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {formatPathForDisplay(agent.global_skills_dir)}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleBatchExplain}
+            disabled={isBatchExplaining || skills.length === 0}
+            aria-label={t("platform.batchExplainLabel", { defaultValue: "一键AI中文解释" })}
+          >
+            {isBatchExplaining ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Bot className="size-3.5" />
+            )}
+            <span>{t("platform.batchExplainLabel", { defaultValue: "一键AI中文解释" })}</span>
+          </Button>
         </div>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          {formatPathForDisplay(agent.global_skills_dir)}
-        </p>
       </div>
 
       {isClaudePage && (
@@ -432,6 +528,7 @@ export function PlatformView() {
                       key={getSkillRowKey(skill)}
                       name={skill.name}
                       description={skill.description}
+                      explanation={explanations.get(skill.row_id ?? skill.id)}
                       sourceType={skill.link_type as "symlink" | "copy" | "native"}
                       originKind={skill.source_kind ?? null}
                       isReadOnly={skill.is_read_only ?? false}
