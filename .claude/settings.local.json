@@ -32,7 +32,17 @@
       "Bash(rtk du *)",
       "Bash(rtk wc *)",
       "Bash(where cargo *)",
-      "Bash(rtk tsc *)"
+      "Bash(rtk tsc *)",
+      "Bash(rtk gh *)",
+      "Bash(/mingw64/bin/curl -L --connect-timeout 15 --max-time 60 -o /tmp/wix314.zip \"https://ghproxy.net/https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Read(//tmp/**)",
+      "Read(//dev/**)",
+      "Bash(git checkout *)",
+      "Bash(taskkill /f /im cargo.exe)",
+      "Bash(taskkill /f /im rustc.exe)",
+      "Bash(dir \"C:\\\\tools\\\\skills-manage\\\\skills-manage_0.10.0_x64_en-US.msi\")",
+      "Bash(node *)"
     ]
   }
 }

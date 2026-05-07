@@ -377,9 +377,9 @@ export function CentralSkillsView() {
     () =>
       visibleSkills.map((skill) => ({
         skill,
-        searchText: buildSearchText([skill.name, skill.description]),
+        searchText: buildSearchText([skill.name, skill.description, explanations.get(skill.id)]),
       })),
-    [visibleSkills]
+    [visibleSkills, explanations]
   );
   const isSearchActive = normalizedSearchQuery.length > 0;
 
@@ -409,11 +409,11 @@ export function CentralSkillsView() {
       const group = centralFolderGroupsByPath.get(bundle.relativePath);
       return (
         group?.skills.some((skill) =>
-          buildSearchText([skill.name, skill.description]).includes(normalizedSearchQuery)
+          buildSearchText([skill.name, skill.description, explanations.get(skill.id)]).includes(normalizedSearchQuery)
         ) ?? false
       );
     });
-  }, [bundles, centralFolderGroupsByPath, normalizedSearchQuery, viewMode]);
+  }, [bundles, centralFolderGroupsByPath, normalizedSearchQuery, viewMode, explanations]);
 
   // Sort filtered skills.
   const sortedSkills = useMemo(() => {

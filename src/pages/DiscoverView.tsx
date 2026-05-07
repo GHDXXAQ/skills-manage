@@ -226,13 +226,42 @@ export function DiscoverView() {
     () => normalizeSearchQuery(effectiveSkillSearch),
     [effectiveSkillSearch]
   );
+  // Load explanations for ALL skills in the selected project (not just displayed
+  // ones) so the search filter can also match against AI explanation text.
+  const allExplanationKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const skill of selectedProject?.skills ?? []) {
+      keys.add(skill.file_path);
+      if (skill.is_already_central) {
+        const baseName = getPathBasename(skill.dir_path);
+        if (baseName) keys.add(baseName);
+      }
+    }
+    return Array.from(keys);
+  }, [selectedProject]);
+
+  const rawExplanations = useSkillExplanations(allExplanationKeys, i18n.language, explainRefreshKey);
+
+  const allExplanations = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const skill of selectedProject?.skills ?? []) {
+      const exp =
+        rawExplanations.get(skill.file_path) ??
+        (skill.is_already_central
+          ? rawExplanations.get(getPathBasename(skill.dir_path) ?? '')
+          : undefined);
+      if (exp) map.set(skill.id, exp);
+    }
+    return map;
+  }, [selectedProject, rawExplanations]);
+
   const selectedProjectSkillEntries = useMemo(
     () =>
       (selectedProject?.skills ?? []).map((skill) => ({
         skill,
-        searchText: buildSearchText([skill.name, skill.description]),
+        searchText: buildSearchText([skill.name, skill.description, allExplanations.get(skill.id)]),
       })),
-    [selectedProject]
+    [selectedProject, allExplanations]
   );
 
   // Whether the currently selected project still matches the active project
@@ -255,36 +284,6 @@ export function DiscoverView() {
       .filter(({ searchText }) => searchText.includes(normalizedSkillQuery))
       .map(({ skill }) => skill);
   }, [normalizedSkillQuery, selectedProject, selectedProjectSkillEntries]);
-
-  // Build explanation lookup keys: use file_path (for file-mode caches) and,
-  // for already-central skills, the dir_path basename (for centrally cached
-  // explanations generated through the central/skill-detail views).
-  const explanationKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const skill of displayedSkills) {
-      keys.add(skill.file_path);
-      if (skill.is_already_central) {
-        const baseName = getPathBasename(skill.dir_path);
-        if (baseName) keys.add(baseName);
-      }
-    }
-    return Array.from(keys);
-  }, [displayedSkills]);
-
-  const rawExplanations = useSkillExplanations(explanationKeys, i18n.language, explainRefreshKey);
-
-  const explanations = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const skill of displayedSkills) {
-      const exp =
-        rawExplanations.get(skill.file_path) ??
-        (skill.is_already_central
-          ? rawExplanations.get(getPathBasename(skill.dir_path) ?? "")
-          : undefined);
-      if (exp) map.set(skill.id, exp);
-    }
-    return map;
-  }, [displayedSkills, rawExplanations]);
 
   useEffect(() => {
     if (!contentRef.current) return;
@@ -491,7 +490,7 @@ export function DiscoverView() {
         file_path: s.file_path,
       }));
 
-      await invoke("batch_explain_skills", { skills: entries, lang: "zh" });
+      await invoke("batch_explain_skills", { skills: entries, lang: i18n.language });
     } catch (err) {
       setIsBatchExplaining(false);
       setBatchProgress(null);
@@ -753,7 +752,7 @@ export function DiscoverView() {
                         key={skill.id}
                         name={skill.name}
                         description={skill.description}
-                        explanation={explanations.get(skill.id)}
+                        explanation={allExplanations.get(skill.id)}
                         checkbox={{
                           checked: selectedSkillIds.has(skill.id),
                           onChange: () => toggleSkillSelection(skill.id),
@@ -786,7 +785,7 @@ export function DiscoverView() {
                         key={skill.id}
                         name={skill.name}
                         description={skill.description}
-                        explanation={explanations.get(skill.id)}
+                        explanation={allExplanations.get(skill.id)}
                         checkbox={{
                           checked: selectedSkillIds.has(skill.id),
                           onChange: () => toggleSkillSelection(skill.id),

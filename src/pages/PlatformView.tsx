@@ -191,7 +191,7 @@ export function PlatformView() {
         file_path: s.file_path,
       }));
 
-      await invoke("batch_explain_skills", { skills: entries, lang: "zh" });
+      await invoke("batch_explain_skills", { skills: entries, lang: i18n.language });
     } catch (err) {
       setIsBatchExplaining(false);
       setBatchProgress(null);
@@ -269,9 +269,10 @@ export function PlatformView() {
       (skill) =>
         skill.id.toLowerCase().includes(q) ||
         skill.name.toLowerCase().includes(q) ||
-        skill.description?.toLowerCase().includes(q)
+        skill.description?.toLowerCase().includes(q) ||
+        explanations.get(skill.row_id ?? skill.id)?.toLowerCase().includes(q)
     );
-  }, [visibleSkills, searchQuery]);
+  }, [visibleSkills, searchQuery, explanations]);
 
   const filteredFolderGroups = useMemo(() => {
     if (viewMode !== "folders") return [];
@@ -285,10 +286,11 @@ export function PlatformView() {
           (skill) =>
             skill.id.toLowerCase().includes(q) ||
             skill.name.toLowerCase().includes(q) ||
-            skill.description?.toLowerCase().includes(q)
+            skill.description?.toLowerCase().includes(q) ||
+            explanations.get(skill.row_id ?? skill.id)?.toLowerCase().includes(q)
         )
     );
-  }, [platformFolderSplit.groups, searchQuery, viewMode]);
+  }, [platformFolderSplit.groups, searchQuery, viewMode, explanations]);
 
   useEffect(() => {
     if (!drawerSkill) return;
