@@ -15,7 +15,7 @@ import {
   Bot,
 } from "lucide-react";
 import type { MouseEventHandler, Ref } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineConfirmAction } from "@/components/ui/inline-confirm-action";
@@ -138,8 +138,6 @@ export interface UnifiedSkillCardProps {
 
 // ─── ExplanationPreview ──────────────────────────────────────────────────────
 
-const EXPLANATION_PREVIEW_LIMIT = 120;
-
 function ExplanationPreview({
   text,
   expanded,
@@ -150,21 +148,32 @@ function ExplanationPreview({
   onToggle: () => void;
 }) {
   const { i18n } = useTranslation();
-  const needsTruncation = text.length > EXPLANATION_PREVIEW_LIMIT;
-  const displayText = expanded || !needsTruncation
-    ? text
-    : `${text.slice(0, EXPLANATION_PREVIEW_LIMIT)}...`;
+  const pRef = useRef<HTMLParagraphElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  useEffect(() => {
+    const el = pRef.current;
+    if (el) {
+      setIsOverflowing(el.scrollHeight > el.clientHeight);
+    }
+  }, [text]);
 
   const showMoreLabel = i18n.language.startsWith("zh") ? "展开全文" : "Show more";
   const showLessLabel = i18n.language.startsWith("zh") ? "收起" : "Show less";
 
   return (
     <div>
-      <p className="text-xs text-muted-foreground leading-relaxed">
+      <p
+        ref={pRef}
+        className={cn(
+          "text-xs text-muted-foreground leading-relaxed",
+          !expanded && "line-clamp-5"
+        )}
+      >
         <Bot className="size-3 inline-block align-text-top mr-1 text-primary/60" />
-        {displayText}
+        {text}
       </p>
-      {needsTruncation && (
+      {(expanded || isOverflowing) && (
         <button
           type="button"
           onClick={(e) => {
@@ -266,7 +275,7 @@ export function UnifiedSkillCard(props: UnifiedSkillCardProps) {
                   onToggle={() => setExplanationExpanded((v) => !v)}
                 />
               ) : description ? (
-                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{description}</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
               ) : null}
               {sourceType && <SourceIndicator sourceType={sourceType} />}
             </div>
@@ -427,7 +436,7 @@ export function UnifiedSkillCard(props: UnifiedSkillCardProps) {
               onToggle={() => setExplanationExpanded((v) => !v)}
             />
           ) : description ? (
-            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{description}</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
           ) : null}
 
           {/* Row 3: Info badges */}
