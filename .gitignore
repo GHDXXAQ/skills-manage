@@ -20,5 +20,8 @@ coverage/
 .DS_Store
 Thumbs.db
 /tmp/
+skills/
 .factory/
 AGENTS.md
+claude.md
+.claude/

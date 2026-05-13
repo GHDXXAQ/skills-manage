@@ -1079,10 +1079,11 @@ async fn get_ai_setting(pool: &crate::db::DbPool, key: &str) -> Option<String> {
         .filter(|v| !v.trim().is_empty())
 }
 
-/// Helper: truncate skill content to 8000 chars.
+/// Helper: truncate skill content to 8000 bytes (safe UTF-8 boundary).
 fn truncate_content(content: &str) -> String {
     if content.len() > 8000 {
-        format!("{}...\n\n(内容已截断)", &content[..8000])
+        let end = content.floor_char_boundary(8000);
+        format!("{}...\n\n(内容已截断)", &content[..end])
     } else {
         content.to_string()
     }
@@ -1322,85 +1323,113 @@ async fn do_explain_skill_stream(
         return Err(format!("API 返回错误 {}: {}", status, body_text));
     }
 
-    // Stream SSE response
+    // Stream SSE response with 5-minute idle timeout
     let mut stream = resp.bytes_stream();
     let mut full_text = String::new();
     let mut sse_buffer = String::new();
     let mut saw_thinking_delta = false;
 
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("流读取失败: {}", e))?;
-        sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
+    let stream_result = async {
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|e| format!("流读取失败: {}", e))?;
+            sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-        // Process complete SSE lines
-        while let Some(newline_pos) = sse_buffer.find('\n') {
-            let line = sse_buffer[..newline_pos].trim().to_string();
-            sse_buffer = sse_buffer[newline_pos + 1..].to_string();
+            // Process complete SSE lines
+            while let Some(newline_pos) = sse_buffer.find('\n') {
+                let line = sse_buffer[..newline_pos].trim().to_string();
+                sse_buffer = sse_buffer[newline_pos + 1..].to_string();
 
-            if line.is_empty() || line.starts_with(':') {
-                continue;
-            }
-
-            let data = if let Some(stripped) = line.strip_prefix("data: ") {
-                stripped
-            } else if let Some(stripped) = line.strip_prefix("data:") {
-                stripped.trim()
-            } else {
-                continue;
-            };
-
-            if data == "[DONE]" {
-                continue;
-            }
-
-            let parsed: serde_json::Value = match serde_json::from_str(data) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            let text_chunk = if is_anthropic {
-                // Anthropic SSE: { "type": "content_block_delta", "delta": { "type": "text_delta", "text": "..." } }
-                let event_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                let delta_type = parsed
-                    .get("delta")
-                    .and_then(|d| d.get("type"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
-                if event_type == "content_block_delta" && delta_type == "thinking_delta" {
-                    saw_thinking_delta = true;
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
                 }
-                if event_type == "content_block_delta" {
-                    parsed
+
+                let data = if let Some(stripped) = line.strip_prefix("data: ") {
+                    stripped
+                } else if let Some(stripped) = line.strip_prefix("data:") {
+                    stripped.trim()
+                } else {
+                    continue;
+                };
+
+                if data == "[DONE]" {
+                    continue;
+                }
+
+                let parsed: serde_json::Value = match serde_json::from_str(data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                let text_chunk = if is_anthropic {
+                    // Anthropic SSE: { "type": "content_block_delta", "delta": { "type": "text_delta", "text": "..." } }
+                    let event_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    let delta_type = parsed
                         .get("delta")
-                        .and_then(|d| d.get("text"))
+                        .and_then(|d| d.get("type"))
                         .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    if event_type == "content_block_delta" && delta_type == "thinking_delta" {
+                        saw_thinking_delta = true;
+                    }
+                    if event_type == "content_block_delta" {
+                        parsed
+                            .get("delta")
+                            .and_then(|d| d.get("text"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    // OpenAI SSE: { "choices": [{ "delta": { "content": "..." } }] }
+                    parsed
+                        .get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("delta"))
+                        .and_then(|d| d.get("content"))
+                        .and_then(|c| c.as_str())
                         .unwrap_or("")
                         .to_string()
-                } else {
-                    String::new()
-                }
-            } else {
-                // OpenAI SSE: { "choices": [{ "delta": { "content": "..." } }] }
-                parsed
-                    .get("choices")
-                    .and_then(|c| c.get(0))
-                    .and_then(|c| c.get("delta"))
-                    .and_then(|d| d.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            };
+                };
 
-            if !text_chunk.is_empty() {
-                full_text.push_str(&text_chunk);
-                let _ = app.emit(
-                    "skill:explanation:chunk",
-                    ExplanationChunkPayload {
-                        skill_id: skill_id.to_string(),
-                        text: text_chunk,
-                    },
-                );
+                if !text_chunk.is_empty() {
+                    full_text.push_str(&text_chunk);
+                    let _ = app.emit(
+                        "skill:explanation:chunk",
+                        ExplanationChunkPayload {
+                            skill_id: skill_id.to_string(),
+                            text: text_chunk,
+                        },
+                    );
+                }
             }
+        }
+        Ok::<_, String>(())
+    };
+
+    // Enforce 5-minute total timeout to prevent indefinite hangs
+    match tokio::time::timeout(Duration::from_secs(300), stream_result).await {
+        Ok(Ok(())) => {} // stream completed normally
+        Ok(Err(e)) => return Err(e), // stream error
+        Err(_) => {
+            // 5-minute timeout elapsed
+            let err_info = ExplanationErrorInfo {
+                message: "AI 解释超时（超过 300 秒），已跳过。请检查 AI 提供商或网络连接。".to_string(),
+                details: "Streaming request timed out after 300 seconds.".to_string(),
+                kind: ExplanationErrorKind::Timeout,
+                retryable: true,
+                fallback_tried: false,
+            };
+            let _ = app.emit(
+                "skill:explanation:error",
+                serde_json::json!({
+                    "skill_id": skill_id,
+                    "error": &err_info.message,
+                    "error_info": err_info,
+                }),
+            );
+            return Err("AI 解释超时（超过 300 秒），已跳过。".to_string());
         }
     }
 
