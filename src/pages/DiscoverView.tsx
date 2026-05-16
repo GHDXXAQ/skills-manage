@@ -28,7 +28,6 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isTauriRuntime, listen } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { consumeScrollPosition } from "@/lib/scrollRestoration";
-import { VirtualizedList } from "@/components/ui/virtualized-list";
 import { getPathBasename } from "@/lib/path";
 import { buildSearchText, normalizeSearchQuery } from "@/lib/search";
 import { isEnabledInstallTargetAgent } from "@/lib/agents";
@@ -739,45 +738,6 @@ export function DiscoverView() {
                       </Button>
                     )}
                   </div>
-                ) : displayedSkills.length > 80 ? (
-                  <VirtualizedList
-                    items={displayedSkills}
-                    itemHeight={120}
-                    itemGap={8}
-                    overscan={6}
-                    scrollContainerRef={contentRef}
-                    itemKey={(skill) => skill.id}
-                    renderItem={(skill) => (
-                      <UnifiedSkillCard
-                        key={skill.id}
-                        name={skill.name}
-                        description={skill.description}
-                        explanation={allExplanations.get(skill.id)}
-                        checkbox={{
-                          checked: selectedSkillIds.has(skill.id),
-                          onChange: () => toggleSkillSelection(skill.id),
-                        }}
-                        isCentral={skill.is_already_central}
-                        platformBadge={{ id: skill.platform_id, name: skill.platform_name }}
-                        projectBadge={skill.project_name}
-                        onDetail={
-                          skill.is_already_central
-                            ? () => handleOpenDrawer(getPathBasename(skill.dir_path) ?? skill.id)
-                            : () => handleOpenDiscoverDrawer(skill)
-                        }
-                        detailButtonRef={(node) => setDetailButtonRef(
-                          skill.is_already_central
-                            ? (getPathBasename(skill.dir_path) ?? skill.id)
-                            : skill.id,
-                          node,
-                        )}
-                        onInstallToCentral={() => handleInstallToCentral(skill.id)}
-                        onInstallToPlatform={() => handleInstallToPlatform(skill)}
-                        isLoading={importingIds.has(skill.id)}
-                        className="h-[120px]"
-                      />
-                    )}
-                  />
                 ) : (
                   <div className="space-y-2">
                     {displayedSkills.map((skill) => (
